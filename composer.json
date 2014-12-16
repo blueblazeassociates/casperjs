@@ -1,0 +1,14 @@
+{
+  "name" : "blueblazeassociates/casperjs",
+  "description" : "A navigation scripting & testing utility for PhantomJS and SlimerJS.",
+  "type" : "project",
+  "homepage" : "http://casperjs.org/",
+  "license" : "MIT",
+  "keywords": [
+    "phantomjs",
+    "slimerjs",
+    "test",
+    "testing",
+    "scraping"
+  ]
+}
