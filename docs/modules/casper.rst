@@ -233,6 +233,10 @@ By default, on timeout the script will exit displaying an error, except in test 
 
 An existing PhantomJS ``WebPage`` instance
 
+.. warning::
+
+   **Overriding** the ``page`` properties can cause some of the casper features **may not work**. For example, overriding the ``onUrlChanged`` property will cause the ``waitForUrl`` feature not work.
+
 .. index:: settings, PhantomJS, SSL, auth, XSS
 
 ``pageSettings``
@@ -764,7 +768,7 @@ Prints something to stdout, optionally with some fancy color (see the :ref:`colo
 
 **Signature:** ``evaluate(Function fn[, arg1[, arg2[, …]]])``
 
-Basically `PhantomJS' WebPage#evaluate <https://github.com/ariya/phantomjs/wiki/API-Reference#wiki-webpage-evaluate>`_ equivalent. Evaluates an expression **in the current page DOM context**::
+Basically `PhantomJS' WebPage#evaluate <http://phantomjs.org/api/webpage/method/evaluate.html>`_ equivalent. Evaluates an expression **in the current page DOM context**::
 
     casper.evaluate(function(username, password) {
         document.querySelector('#username').value = username;
@@ -1881,7 +1885,7 @@ Adds a new navigation step to perform code evaluation within the current retriev
 
     casper.run();
 
-This method is basically a convenient a shortcut for chaining a `then()`_ and an `evaluate()`_ calls.
+This method is a convenient shortcut for chaining `then()`_ and `evaluate()`_ calls.
 
 ``thenOpen()``
 -------------------------------------------------------------------------------

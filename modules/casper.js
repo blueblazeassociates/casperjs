@@ -179,7 +179,9 @@ var Casper = function Casper(options) {
             throw new CasperError('casper.test property is only available using the `casperjs test` command');
         }
         if (!utils.isObject(this._test)) {
-            this._test = tester.create(this);
+            this._test = tester.create(this, {
+                concise: this.cli.get('concise')
+            });
         }
         return this._test;
     });
@@ -756,7 +758,7 @@ Casper.prototype.exists = function exists(selector) {
 Casper.prototype.exit = function exit(status) {
     "use strict";
     this.emit('exit', status);
-    phantom.exit(status);
+    setTimeout(function() { phantom.exit(status); }, 0);
 };
 
 /**
