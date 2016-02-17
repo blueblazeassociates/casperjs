@@ -10,4 +10,5 @@
 # Blue Blaze
 /.settings
 /.project
+/composer
 /composer.phar
