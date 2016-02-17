@@ -1,5 +1,4 @@
-/*global casper, __utils__*/
-/*jshint strict:false*/
+/*eslint strict:0*/
 var tester = require('tester');
 var testpage = require('webpage').create();
 
@@ -95,5 +94,19 @@ casper.test.begin('XUnitReporter() can handle custom name attribute for a test c
     casper.start().setContent(xunit.getSerializedXML());
     test.assertExists('testsuite[name="foo"][package="foo"][tests="1"][failures="1"] testcase[name="foo bar baz"] failure[type="footype"]');
     test.assertEquals(casper.getElementInfo('failure[type="footype"]').text, 'footext');
+    test.done();
+});
+
+casper.test.begin('XUnitReporter() does not have default XML namespace', 1, function suite(test) {
+    var xunit = require('xunit').create();
+    var results = new tester.TestSuiteResult();
+    var suite1 = new tester.TestCaseResult({
+        name: 'foo',
+        file: '/foo'
+    });
+    results.push(suite1);
+    xunit.setResults(results);
+    casper.start().setContent(xunit.getSerializedXML());
+    test.assertNotExists('testsuites[xmlns]');
     test.done();
 });
