@@ -308,7 +308,7 @@ class ScriptOptionsTest(CasperExecTestBase):
         # Specify a mix of engine and script options.
         # --whoops is special in that it starts with --w, which is a phantomjs engine command.
         #  At one time was mishandled in src/casperjs.cs.
-        script_path_script_args = script_path + ' --debug=no --load-images=no --whoops --this-is-a=test'
+        script_path_script_args = script_path + ' --debug=no --load-images=no --whoops --this-is-a=test --max-disk-cache-size=1024'
         self.assertCommandOutputContains(script_path_script_args, [
             '    "whoops": true,',
             '    "this-is-a": "test"',
@@ -319,10 +319,11 @@ class ScriptOptionsTest(CasperExecTestBase):
         # Specify a mix of engine and script options.
         # --whoops is special in that it starts with --w, which is a phantomjs engine command.
         #  At one time was mishandled in src/casperjs.cs.
-        script_path_script_args = script_path + ' --debug=no --load-images=no --whoops --this-is-a=test'
+        script_path_script_args = script_path + ' --debug=no --load-images=no --whoops --this-is-a=test --max-disk-cache-size=1024'
         self.assertCommandOutputDoesNotContain(script_path_script_args, [
-            '    "debug": false,',
-            '    "load-images": false,',
+            '    "debug": "no",',
+            '    "load-images": "no",',
+            '    "max-disk-cache-size": 1024',
         ])
 
 
@@ -532,17 +533,20 @@ class XUnitReportTest(CasperExecTestBase):
         if os.path.exists(self.XUNIT_LOG):
             os.remove(self.XUNIT_LOG)
 
-    def test_xunit_report_passing(self):
-        script_path = os.path.join(TEST_ROOT, 'tester', 'passing.js')
-        command = 'test %s --xunit=%s' % (script_path, self.XUNIT_LOG)
-        self.runCommand(command, failing=False)
-        self.assertTrue(os.path.exists(self.XUNIT_LOG))
-
     def test_xunit_report_failing(self):
         script_path = os.path.join(TEST_ROOT, 'tester', 'failing.js')
         command = 'test %s --xunit=%s' % (script_path, self.XUNIT_LOG)
         self.runCommand(command, failing=True)
         self.assertTrue(os.path.exists(self.XUNIT_LOG))
+        self.assertTrue(open(self.XUNIT_LOG).read().find('classname="tests/clitests/tester/failing"'))
+
+    def test_xunit_report_passing(self):
+        script_path = os.path.join(TEST_ROOT, 'tester', 'passing.js')
+        command = 'test %s --xunit=%s' % (script_path, self.XUNIT_LOG)
+        self.runCommand(command, failing=False)
+        self.assertTrue(os.path.exists(self.XUNIT_LOG))
+        self.assertTrue(open(self.XUNIT_LOG).read().find('classname="tests/clitests/tester/passing"'))
+
 
 if __name__ == '__main__':
     del sys.argv[1:]

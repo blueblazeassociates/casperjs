@@ -2,7 +2,7 @@
  * Casper is a navigation utility for PhantomJS.
  *
  * Documentation: http://casperjs.org/
- * Repository:    http://github.com/n1k0/casperjs
+ * Repository:    http://github.com/casperjs/casperjs
  *
  * Copyright (c) 2011-2012 Nicolas Perriault
  *
@@ -173,7 +173,9 @@ CasperError.prototype = Object.getPrototypeOf(new Error());
             fs.pathJoin = fs.joinPath;
         } else if (!fs.hasOwnProperty('pathJoin')) {
             fs.pathJoin = function pathJoin() {
-                return Array.prototype.join.call(arguments, '/');
+                return Array.prototype.filter.call(arguments,function(elm){
+                    return typeof elm !== "undefined" && elm !== null;
+                }).join('/');
             };
         }
         return fs;
@@ -279,7 +281,7 @@ CasperError.prototype = Object.getPrototypeOf(new Error());
                 resolved = resolveFile(path, fs.pathJoin(baseDir, 'node_modules'));
                 prevBaseDir = baseDir;
                 baseDir = fs.absolute(fs.pathJoin(prevBaseDir, '..'));
-            } while (!resolved && baseDir !== '/' && baseDir !== prevBaseDir);
+            } while (!resolved && baseDir !== '/' && prevBaseDir !== '/' && baseDir !== prevBaseDir);
             return resolved;
         }
         function localModulePath(path) {
@@ -422,6 +424,12 @@ CasperError.prototype = Object.getPrototypeOf(new Error());
 
     // casper loading status flag
     phantom.casperLoaded = true;
+    if (phantom.version.major === 2
+        && phantom.casperScript
+        && phantom.casperScript.split('.').pop() === 'coffee'
+        ) {
+        return __terminate('CoffeeScript is not supported by PhantomJS > 2.');
+    }
 
     // passed casperjs script execution
     if (phantom.casperScript && !phantom.injectJs(phantom.casperScript)) {

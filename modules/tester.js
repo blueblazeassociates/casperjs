@@ -2,7 +2,7 @@
  * Casper is a navigation utility for PhantomJS.
  *
  * Documentation: http://casperjs.org/
- * Repository:    http://github.com/n1k0/casperjs
+ * Repository:    http://github.com/casperjs/casperjs
  *
  * Copyright (c) 2011-2012 Nicolas Perriault
  *
@@ -1548,7 +1548,7 @@ Tester.prototype.renderResults = function renderResults(exit, status, save) {
         exitStatus = 1;
         statusText = this.options.warnText;
         style = 'WARN_BAR';
-        result = f("%s Looks like you didn't run any test.", statusText);
+        result = f("%s Looks like you didn't run any tests.", statusText);
     } else {
         if (this.suiteResults.isFailed()) {
             exitStatus = 1;

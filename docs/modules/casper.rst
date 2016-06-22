@@ -478,7 +478,7 @@ Bypasses a given number of defined navigation steps::
 ``click()``
 -------------------------------------------------------------------------------
 
-**Signature:** ``click(String selector)``
+**Signature:** ``click(String selector, [Number|String X, Number|String Y])``
 
 Performs a click on the element matching the provided :doc:`selector expression <../selectors>`. The method tries two strategies sequentially:
 
@@ -498,6 +498,17 @@ Example::
         // Click on 1st result link
         this.click('h3.r a');
     });
+
+    casper.then(function() {
+        // Click on 1st result link
+        this.click('h3.r a',10,10);
+    });
+
+    casper.then(function() {
+        // Click on 1st result link
+        this.click('h3.r a',"50%","50%");
+    });
+
 
     casper.then(function() {
         console.log('clicked ok, new location is ' + this.getCurrentUrl());
@@ -728,7 +739,7 @@ Iterates over provided array items and execute a callback::
 
 .. hint::
 
-   Have a look at the `googlematch.js <https://github.com/n1k0/casperjs/blob/master/samples/googlematch.js>`_ sample script for a concrete use case.
+   Have a look at the `googlematch.js <https://github.com/casperjs/casperjs/blob/master/samples/googlematch.js>`_ sample script for a concrete use case.
 
 ``eachThen()``
 -------------------------------------------------------------------------------
@@ -802,7 +813,7 @@ Basically `PhantomJS' WebPage#evaluate <http://phantomjs.org/api/webpage/method/
 
 .. warning::
 
-   The pre-1.0 way of passing arguments using an object has been kept for BC purpose, though it may `not work in some case <https://github.com/n1k0/casperjs/issues/349>`_; so you're encouraged to use the method described above.
+   The pre-1.0 way of passing arguments using an object has been kept for BC purpose, though it may `not work in some case <https://github.com/casperjs/casperjs/issues/349>`_; so you're encouraged to use the method described above.
 
 .. topic:: Understanding ``evaluate()``
 
@@ -816,7 +827,7 @@ Basically `PhantomJS' WebPage#evaluate <http://phantomjs.org/api/webpage/method/
 ``evaluateOrDie()``
 -------------------------------------------------------------------------------
 
-**Signature:** ``evaluateOrDie(Function fn[, String message])``
+**Signature:** ``evaluateOrDie(Function fn[, String message, int status])``
 
 Evaluates an expression within the current page DOM and ``die()`` if it returns anything but ``true``::
 
@@ -836,6 +847,8 @@ Evaluates an expression within the current page DOM and ``die()`` if it returns 
 **Signature:** ``exit([int status])``
 
 Exits PhantomJS with an optional exit status code.
+
+Note: You can not rely on the fact that your script will be turned off immediately, because this method works asynchronously. It means that your script may continue to be executed after the call of this method. More info `here <https://github.com/casperjs/casperjs/issues/193>`_.
 
 .. index:: DOM
 
@@ -1007,7 +1020,7 @@ are referenced by ``CSS3`` selectors::
             'input[name="attachment"]': '/Users/chuck/roundhousekick.doc'
         }, true);
     });
-    
+
 ``fillLabels()``
 -------------------------------------------------------------------------------
 
@@ -1357,16 +1370,22 @@ Retrieves current page title::
 ``mouseEvent()``
 -------------------------------------------------------------------------------
 
-**Signature:** ``mouseEvent(String type, String selector)``
+**Signature:** ``mouseEvent(String type, String selector, [Number|String X, Number|String Y])``
 
 .. versionadded:: 0.6.9
+.. versionupdate:: 1.1.0-beta6
 
 Triggers a mouse event on the first element found matching the provided selector.
 
-Supported events are ``mouseup``, ``mousedown``, ``click``, ``mousemove``, ``mouseover`` and ``mouseout``::
+Supported events are ``mouseup``, ``mousedown``, ``click``, ``dblclick``, ``mousemove``, ``mouseover``, ``mouseout``
+and for phantomjs >= 1.9.8 ``mouseenter``, ``mouseleave`` and ``contextmenu``::
+
+.. warning::
+The list of supported events depends on the version of the engine in use.
+Older engines only provide partial support. For best support use recent builds of PhantomJS or SlimerJS."
 
     casper.start('http://www.google.fr/', function() {
-        this.mouseEvent('click', 'h2 a');
+        this.mouseEvent('click', 'h2 a', "20%", "50%");
     });
 
     casper.run();
@@ -1377,6 +1396,8 @@ Supported events are ``mouseup``, ``mousedown``, ``click``, ``mousemove``, ``mou
 **Signature:** ``newPage()``
 
 .. versionadded:: 1.1
+
+**Only available since version 1.1.0.**
 
 Creates a new WebPage instance::
 
@@ -1444,6 +1465,22 @@ To pass nested parameters arrays::
     });
 
 .. versionadded:: 1.0
+
+To POST some data with utf-8 encoding::
+
+    casper.open('http://some.testserver.com/post.php', {
+           method: 'post',
+           headers: {
+               'Content-Type': 'application/json; charset=utf-8'
+           },
+           encoding: 'utf8', // not enforced by default
+           data: {
+                'table_flip': '(╯°□°）╯︵ ┻━┻ ',
+           }
+    });
+
+.. versionadded:: 1.1
+
 
 You can also set custom request headers to send when performing an outgoing request, passing the ``headers`` option::
 
@@ -2149,6 +2186,8 @@ Example using the ``onTimeout`` callback::
 ``details`` is a property bag of various information that will be passed to the ``waitFor.timeout`` event, if it is emitted.
 This can be used for better error messages or to conditionally ignore some timeout events.
 
+Please note, that all `waitFor` methods are not chainable.  Consider wrapping each of them in a `casper.then` in order to acheive this functionality.
+
 .. index:: alert
 
 ``waitForAlert()``
@@ -2325,7 +2364,15 @@ Waits until an element matching the provided :doc:`selector expression <../selec
 
 **Signature:** ``waitWhileVisible(String selector[, Function then, Function onTimeout, Number timeout])``
 
-Waits until an element matching the provided :doc:`selector expression <../selectors>` is no longer visible in remote DOM to process a next step. Uses `waitFor()`_.
+Waits until an element matching the provided :doc:`selector expression <../selectors>` is no longer visible in remote DOM to process a next step. Uses `waitFor()`_::
+
+    var casper = require('casper').create();
+    
+    casper.start('https://www.example.com/').thenClick('html body div p a', function () { 
+        this.waitWhileVisible('body > div:nth-child(1) > p:nth-child(2)', function () {
+            this.echo("The selected element existed in previous page but doesn't exist in this page.");
+        })
+    }).run();
 
 ``warn()``
 -------------------------------------------------------------------------------

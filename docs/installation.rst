@@ -15,6 +15,10 @@ Prerequisites
 - PhantomJS_ 1.9.1 or greater. Please read the `installation instructions for PhantomJS <http://phantomjs.org/download.html>`_
 - Python_ 2.6 or greater for ``casperjs`` in the ``bin/`` directory
 
+.. note::
+
+   CoffeeScript is not natively supported in PhantomJS versions 2.0.0 and above.  If you are going to use CoffeeScript you'll have to transpile it into vanilla Javascript.  See :ref:`known issues <known_issues>` for more details.
+
 .. versionadded:: 1.1
 
 - **Experimental:** as of 1.1.0-beta1, SlimerJS_ 0.8 or greater to run your tests against Gecko (Firefox) instead of Webkit (just add `--engine=slimerjs` to your command line options). The SlimerJS developers documented `the PhantomJS API compatibility of SlimerJS <https://github.com/laurentj/slimerjs/blob/master/API_COMPAT.md>`_ as well as `the differences between PhantomJS and SlimerJS <http://docs.slimerjs.org/current/differences-with-phantomjs.html>`_. Note that it is known that coffescript support breaks as of SlimerJS_ 0.9.6; we are investigating that issue.
@@ -60,7 +64,7 @@ You can install CasperJS using `npm <http://npmjs.org/>`_:
 - For most users (current version 1.1.0-beta4):
 
     $ npm install -g casperjs
-    
+
 - If you want a specific older version:
 
     - For beta3: $ npm install -g casperjs@1.1.0-beta3
@@ -69,7 +73,7 @@ You can install CasperJS using `npm <http://npmjs.org/>`_:
 
 - If you want to install the current master from git using npm:
 
-    $ npm install -g git+https://github.com/n1k0/casperjs.git
+    $ npm install -g git+https://github.com/casperjs/casperjs.git
 
 .. note::
 
@@ -78,20 +82,20 @@ You can install CasperJS using `npm <http://npmjs.org/>`_:
 .. warning::
 
    While CasperJS is installable via npm, :ref:`it is not a NodeJS module <faq_node>` and will not work with NodeJS out of the box. **You cannot load casper by using require('casperjs') in node.** Note that CasperJS is not capable of using a vast majority of NodeJS modules out there. **Experiment and use your best judgement.**
-   
+
 .. index:: git
 
 Installing from git
 -------------------
 
-Installation can be achieved using `git <http://git-scm.com/>`_. The code is mainly hosted on `Github <https://github.com/n1k0/casperjs>`_.
+Installation can be achieved using `git <http://git-scm.com/>`_. The code is mainly hosted on `Github <https://github.com/casperjs/casperjs>`_.
 
 From the master branch
 ~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: text
 
-    $ git clone git://github.com/n1k0/casperjs.git
+    $ git clone git://github.com/casperjs/casperjs.git
     $ cd casperjs
     $ ln -sf `pwd`/bin/casperjs /usr/local/bin/casperjs
 
@@ -112,7 +116,7 @@ Or if SlimerJS is your thing:
     $ slimerjs --version
     Innophi SlimerJS 0.8pre, Copyright 2012-2013 Laurent Jouanneau & Innophi
     $ casperjs
-    CasperJS version 1.1.0-beta4 at /Users/niko/Sites/casperjs, using slimerjs version 0.8.0
+    CasperJS version 1.1.0 at /Users/niko/Sites/casperjs, using slimerjs version 0.8.0
 
 You are now ready to write your :doc:`first script <quickstart>`!
 
@@ -124,13 +128,13 @@ You can download tagged archives of CasperJS code:
 
 **Latest development version (master branch):**
 
-- https://github.com/n1k0/casperjs/zipball/master (zip)
-- https://github.com/n1k0/casperjs/tarball/master (tar.gz)
+- https://github.com/casperjs/casperjs/zipball/master (zip)
+- https://github.com/casperjs/casperjs/tarball/master (tar.gz)
 
 **Latest stable version:**
 
-- https://github.com/n1k0/casperjs/zipball/1.0.3 (zip)
-- https://github.com/n1k0/casperjs/tarball/1.0.3 (tar.gz)
+- https://github.com/casperjs/casperjs/zipball/1.1.0 (zip)
+- https://github.com/casperjs/casperjs/tarball/1.1.0 (tar.gz)
 
 Operations are then the same as with a git checkout.
 

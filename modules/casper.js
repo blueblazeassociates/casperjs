@@ -2,7 +2,7 @@
  * Casper is a navigation utility for PhantomJS.
  *
  * Documentation: http://casperjs.org/
- * Repository:    http://github.com/n1k0/casperjs
+ * Repository:    http://github.com/casperjs/casperjs
  *
  * Copyright (c) 2011-2012 Nicolas Perriault
  *
@@ -270,9 +270,11 @@ Casper.prototype.bypass = function bypass(nb) {
     "use strict";
     var step = this.step,
         steps = this.steps,
-        last = steps.length;
+        last = steps.length,
+        targetStep = Math.min(step + nb, last);
     this.checkStarted();
-    this.step = Math.min(step + nb, last);
+    this.step = targetStep;
+    this.emit('step.bypassed', targetStep, step);
     return this;
 };
 
@@ -458,13 +460,16 @@ Casper.prototype.clear = function clear() {
  * In case of success, `true` is returned, `false` otherwise.
  *
  * @param  String   selector  A DOM CSS3 compatible selector
+ * @param  String   target    A HTML target '_blank','_self','_parent','_top','framename' (optional)
+ * @param  Number   x         X position (optional)
+ * @param  Number   y         Y position (optional)
  * @return Boolean
  */
-Casper.prototype.click = function click(selector) {
+Casper.prototype.click = function click(selector, x, y) {
     "use strict";
     this.checkStarted();
-    var success = this.mouseEvent('mousedown', selector) && this.mouseEvent('mouseup', selector);
-    success = success && this.mouseEvent('click', selector);
+    var success = this.mouseEvent('mousedown', selector, x, y) && this.mouseEvent('mouseup', selector, x, y);
+    success = success && this.mouseEvent('click', selector, x, y);
     this.evaluate(function(selector) {
         var element = __utils__.findOne(selector);
         if (element) {
@@ -821,16 +826,19 @@ Casper.prototype.fillForm = function fillForm(selector, vals, options) {
                 if (!file || !file.path) {
                     return;
                 }
-                if (!fs.exists(file.path)) {
-                    throw new CasperError('Cannot upload nonexistent file: ' + file.path);
-                }
+                var paths = (utils.isArray(file.path) && file.path.length > 0) ? file.path : [file.path];
+                paths.map(function(filePath) {
+                            if (!fs.exists(filePath)) {
+                                throw new CasperError('Cannot upload nonexistent file: ' + filePath);
+                            }
+                        },this);
                 var fileFieldSelector;
                 if (file.type === "names") {
                     fileFieldSelector = [selector, 'input[name="' + file.selector + '"]'].join(' ');
                 } else if (file.type === "css" || file.type === "labels") {
                     fileFieldSelector = [selector, file.selector].join(' ');
                 }
-                this.page.uploadFile(fileFieldSelector, file.path);
+                this.page.uploadFile(fileFieldSelector, paths);
             }.bind(this));
         }
     }
@@ -855,6 +863,8 @@ Casper.prototype.fillForm = function fillForm(selector, vals, options) {
             }
         }, selector);
     }
+    
+    return this;
 };
 
 /**
@@ -1204,7 +1214,10 @@ Casper.prototype.handleReceivedResource = function(resource) {
         return;
     }
     this.resources.push(resource);
-    if (utils.decodeUrl(resource.url) !== this.requestUrl) {
+
+    var checkUrl = ((phantom.casperEngine === 'phantomjs' && utils.ltVersion(phantom.version, '2.1.0')) ||
+                   (phantom.casperEngine === 'slimerjs' && utils.ltVersion(phantom.version, '0.10.0'))) ? utils.decodeUrl(resource.url) : resource.url;
+    if (checkUrl !== this.requestUrl) {
         return;
     }
     this.currentHTTPStatus = null;
@@ -1367,21 +1380,23 @@ Casper.prototype.log = function log(message, level, space) {
  *
  * @param  String   type      Type of event to emulate
  * @param  String   selector  A DOM CSS3 compatible selector
+ * @param  {Number} x X position
+ * @param  {Number} y Y position
  * @return Boolean
  */
-Casper.prototype.mouseEvent = function mouseEvent(type, selector) {
+Casper.prototype.mouseEvent = function mouseEvent(type, selector, x, y) {
     "use strict";
     this.checkStarted();
     this.log("Mouse event '" + type + "' on selector: " + selector, "debug");
     if (!this.exists(selector)) {
         throw new CasperError(f("Cannot dispatch %s event on nonexistent selector: %s", type, selector));
     }
-    if (this.callUtils("mouseEvent", type, selector)) {
+    if (this.callUtils("mouseEvent", type, selector, x, y)) {
         return true;
     }
     // fallback onto native QtWebKit mouse events
     try {
-        return this.mouse.processEvent(type, selector);
+        return this.mouse.processEvent(type, selector, x, y);
     } catch (e) {
         this.log(f("Couldn't emulate '%s' event on %s: %s", type, selector, e), "error");
     }
@@ -1440,10 +1455,16 @@ Casper.prototype.open = function open(location, settings) {
     this.page.customHeaders = utils.mergeObjects(utils.clone(baseCustomHeaders), customHeaders);
     // perfom request
     this.browserInitializing = true;
-    this.page.openUrl(this.requestUrl, {
+    var phantomJsSettings = {
         operation: settings.method,
         data:      settings.data
-    }, this.page.settings);
+    };
+    // override any default encoding setting in phantomjs
+    if ('encoding' in settings) {
+        phantomJsSettings.encoding = settings.encoding;
+    }
+
+    this.page.openUrl(this.requestUrl, phantomJsSettings, this.page.settings);
     // revert base custom headers
     this.page.customHeaders = baseCustomHeaders;
     return this;
@@ -1678,6 +1699,62 @@ Casper.prototype.setContent = function setContent(content) {
     this.checkStarted();
     this.page.content = content;
     return this;
+};
+
+
+/**
+ * Sets a value to form field by CSS3, XPath selector or by its name attribute or label text.
+ *
+ * @param String|Object selector    CSS3, XPath, name or label
+ * @param Mixed         value       Value being set
+ * @param String|Object form        (optional) CSS3 or XPath selector of form
+ * @param Object        options     Options to setFieldValue, it accepts:
+ *                                  - options.selectorType name|labes|xpath|css3 - type of selector, where
+ *                                    CSS3 and XPath(object) is autodetected (need not be set)
+ */
+Casper.prototype.setFieldValue = function setFieldValue(selector, value, form, options) {
+    "use strict";
+    this.checkStarted();
+
+    var selectorType = options && options.selectorType;
+
+    var result = this.evaluate(function _evaluate(selector, value, form, selectorType) {
+        if (selectorType) {
+            selector = __utils__.makeSelector(selector, selectorType);
+        }
+        return __utils__.setFieldValue(selector, value, {'formSelector': form});
+    }, selector, value, form, selectorType);
+
+    if (!result) {
+        throw new CasperError("Unable to set field '" + selector + " to value: " + value) +
+            ' in setFieldValue().';
+    }
+};
+
+/**
+ * Alias to setFieldValue() with implicit type name
+ *
+ * @param String        name    Name of form field
+ * @param Mixed         value   Value being set
+ * @param String|Object form    (optional) CSS3 or XPath selector of form
+ */
+Casper.prototype.setFieldValueName = function setFieldValueName(name, value, form) {
+    "use strict";
+    this.checkStarted();
+    this.setFieldValue(name, value, form, {'selectorType': 'name'});
+};
+
+/**
+ * Alias to setFieldValue() with implicit type label
+ *
+ * @param String        name    Name of form field
+ * @param Mixed         value   Value being set
+ * @param String|Object form    (optional) CSS3 or XPath selector of form
+ */
+Casper.prototype.setFieldValueLabel = function setFieldValueLabel(label, value, form) {
+    "use strict";
+    this.checkStarted();
+    this.setFieldValue(label, value, form, {'selectorType': 'label'});
 };
 
 /**
@@ -2609,7 +2686,7 @@ function createPage(casper) {
             casper.emit('popup.loaded', popupPage);
         };
         popupPage.onClosing = function onClosing(closedPopup) {
-            casper.popups.clean(closedPopup);
+            casper.popups.clean();
             casper.emit('popup.closed', closedPopup);
         };
     };
@@ -2626,7 +2703,9 @@ function createPage(casper) {
     };
     page.onResourceRequested = function onResourceRequested(requestData, request) {
         casper.emit('resource.requested', requestData, request);
-        if (requestData.url === casper.requestUrl) {
+        var checkUrl = ((phantom.casperEngine === 'phantomjs' && utils.ltVersion(phantom.version, '2.1.0')) ||
+                   (phantom.casperEngine === 'slimerjs' && utils.ltVersion(phantom.version, '0.10.0'))) ? utils.decodeUrl(requestData.url) : requestData.url;
+        if (checkUrl === casper.requestUrl) {
             casper.emit('page.resource.requested', requestData, request);
         }
         if (utils.isFunction(casper.options.onResourceRequested)) {
