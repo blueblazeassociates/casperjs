@@ -6,3 +6,9 @@
 /docs/_build
 /tmp
 *.pyc
+
+# Blue Blaze
+/.settings
+/.project
+/composer.phar
+/composer
