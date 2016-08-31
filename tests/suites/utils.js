@@ -314,7 +314,7 @@ casper.test.begin('isJsFile() tests', 5, function(test) {
         '':             false,
         'toto.png':     false,
         'plop':         false,
-        'gniii.coffee': '.coffee' in require.extensions,
+        'gniii.coffee': '.coffee' in require.extensions || false,
         'script.js':    true
     };
     for (var testCase in testCases) {

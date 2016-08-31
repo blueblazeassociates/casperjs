@@ -608,6 +608,7 @@ Casper.prototype.download = function download(url, targetPath, method, data) {
         this.emit('downloaded.file', targetPath);
         this.log(f("Downloaded and saved resource in %s", targetPath));
     } catch (e) {
+        this.emit('downloaded.error', url);
         this.log(f("Error while downloading %s to %s: %s", url, targetPath, e), "error");
     }
     return this;
@@ -842,6 +843,7 @@ Casper.prototype.fillForm = function fillForm(selector, vals, options) {
             }.bind(this));
         }
     }
+
     // Form submission?
     if (submit) {
         this.evaluate(function _evaluate(selector) {
@@ -976,6 +978,17 @@ Casper.prototype.getPageContent = function getPageContent() {
     // FIXME: with slimerjs this will work only for
     // text/* and application/json content types.
     // see FIXME in slimerjs src/modules/webpageUtils.jsm getWindowContent
+    return this.page.framePlainText;
+};
+
+/**
+ * Retrieves current page contents in plain text.
+ *
+ * @return String
+ */
+Casper.prototype.getPlainText = function getPlainText() {
+    "use strict";
+    this.checkStarted();
     return this.page.framePlainText;
 };
 
@@ -1216,7 +1229,7 @@ Casper.prototype.handleReceivedResource = function(resource) {
     this.resources.push(resource);
 
     var checkUrl = ((phantom.casperEngine === 'phantomjs' && utils.ltVersion(phantom.version, '2.1.0')) ||
-                   (phantom.casperEngine === 'slimerjs' && utils.ltVersion(phantom.version, '0.10.0'))) ? utils.decodeUrl(resource.url) : resource.url;
+                   (phantom.casperEngine === 'slimerjs' && utils.ltVersion(slimer.version, '0.10.0'))) ? utils.decodeUrl(resource.url) : resource.url;
     if (checkUrl !== this.requestUrl) {
         return;
     }
@@ -1591,7 +1604,11 @@ Casper.prototype.runStep = function runStep(step) {
     }
     this.emit('step.start', step);
     if (this.currentResponse) {
-        this.currentResponse.data = step.options && step.options.data || null;
+        if (step.options && (typeof step.options.data !== 'undefined')) {
+            this.currentResponse.data = step.options.data;
+        } else {
+            this.currentResponse.data = null;
+        }
     }
     try {
         stepResult = step.call(this, this.currentResponse);
@@ -1717,12 +1734,11 @@ Casper.prototype.setFieldValue = function setFieldValue(selector, value, form, o
     this.checkStarted();
 
     var selectorType = options && options.selectorType;
-
     var result = this.evaluate(function _evaluate(selector, value, form, selectorType) {
         if (selectorType) {
             selector = __utils__.makeSelector(selector, selectorType);
         }
-        return __utils__.setFieldValue(selector, value, {'formSelector': form});
+        return __utils__.setFieldValue(selector, value, form);
     }, selector, value, form, selectorType);
 
     if (!result) {
@@ -2094,6 +2110,18 @@ Casper.prototype.visible = function visible(selector) {
 };
 
 /**
+ * Checks if all elements matching the provided DOM CSS3/XPath selector are visible
+ *
+ * @param  String  selector  A DOM CSS3/XPath selector
+ * @return Boolean
+ */
+Casper.prototype.allVisible = function allVisible(selector) {
+    "use strict";
+    this.checkStarted();
+    return this.callUtils("allVisible", selector);
+};
+
+/**
  * Displays a warning message onto the console and logs the event. Also emits a
  * `warn` event with the message passed.
  *
@@ -2109,6 +2137,36 @@ Casper.prototype.warn = function warn(message) {
 };
 
 /**
+ * Helper functions needed in wait*() methods. Casts timeout argument to integer and checks if next step
+ * function is really a function and if it has been given (if required - depending on isThenRequired flag).
+ *
+ * @param   Number   timeout        The max amount of time to wait, in milliseconds
+ * @param   Function then           Next step to process (optional or required, depending on isThenRequired flag)
+ * @param   String   methodName     Name of the method, inside of which the helper has been called
+ * @param   Number   defaultTimeout The default max amount of time to wait, in milliseconds (optional)
+ * @param   Boolean  isThenRequired Determines if the next step function should be considered as required
+ * @returns Number
+ */
+function getTimeoutAndCheckNextStepFunction(timeout, then, methodName, defaultTimeout, isThenRequired) {
+    if (isThenRequired || then) {
+        var isFunction = utils.isFunction(then); // Optimization to perform "isFunction" check only once.
+
+        if (isThenRequired && !isFunction) {
+            throw new CasperError(methodName + "() needs a step function");
+        } else if (then && !isFunction) {
+            throw new CasperError(methodName + "() next step definition must be a function");
+        }
+    }
+
+    timeout = ~~timeout || ~~defaultTimeout;
+    if (timeout < 0) {
+        throw new CasperError(methodName + "() only accepts an integer >= 0 as a timeout value");
+    }
+
+    return timeout;
+}
+
+/**
  * Adds a new step that will wait for a given amount of time (expressed
  * in milliseconds) before processing an optional next one.
  *
@@ -2119,13 +2177,7 @@ Casper.prototype.warn = function warn(message) {
 Casper.prototype.wait = function wait(timeout, then) {
     "use strict";
     this.checkStarted();
-    timeout = ~~timeout;
-    if (timeout < 1) {
-        throw new CasperError("wait() only accepts a positive integer > 0 as a timeout value");
-    }
-    if (then && !utils.isFunction(then)) {
-        throw new CasperError("wait() a step definition must be a function");
-    }
+    timeout = getTimeoutAndCheckNextStepFunction(timeout, then, 'wait');
     return this.then(function _step() {
         this.waitStart();
         setTimeout(function _check(self) {
@@ -2170,14 +2222,11 @@ Casper.prototype.waitDone = function waitDone() {
 Casper.prototype.waitFor = function waitFor(testFx, then, onTimeout, timeout, details) {
     "use strict";
     this.checkStarted();
-    timeout = timeout || this.options.waitTimeout;
-    details = details || { testFx: testFx };
     if (!utils.isFunction(testFx)) {
         throw new CasperError("waitFor() needs a test function");
     }
-    if (then && !utils.isFunction(then)) {
-        throw new CasperError("waitFor() next step definition must be a function");
-    }
+    timeout = getTimeoutAndCheckNextStepFunction(timeout, then, 'waitFor', this.options.waitTimeout);
+    details = details || { testFx: testFx };
     return this.then(function _step() {
         this.waitStart();
         var start = new Date().getTime();
@@ -2227,9 +2276,7 @@ Casper.prototype.waitFor = function waitFor(testFx, then, onTimeout, timeout, de
  */
 Casper.prototype.waitForAlert = function(then, onTimeout, timeout) {
     "use strict";
-    if (!utils.isFunction(then)) {
-        throw new CasperError("waitForAlert() needs a step function");
-    }
+    timeout = getTimeoutAndCheckNextStepFunction(timeout, then, 'waitForAlert', undefined, true);
     var message;
     function alertCallback(msg) {
         message = msg;
@@ -2254,6 +2301,7 @@ Casper.prototype.waitForAlert = function(then, onTimeout, timeout) {
  */
 Casper.prototype.waitForPopup = function waitForPopup(urlPattern, then, onTimeout, timeout) {
     "use strict";
+    timeout = getTimeoutAndCheckNextStepFunction(timeout, then, 'waitForPopup');
     return this.waitFor(function() {
         try {
             this.popups.find(urlPattern);
@@ -2277,7 +2325,7 @@ Casper.prototype.waitForPopup = function waitForPopup(urlPattern, then, onTimeou
 Casper.prototype.waitForResource = function waitForResource(test, then, onTimeout, timeout) {
     "use strict";
     this.checkStarted();
-    timeout = timeout ? timeout : this.options.waitTimeout;
+    timeout = getTimeoutAndCheckNextStepFunction(timeout, then, 'waitForResource', this.options.waitTimeout);
     return this.waitFor(function _check() {
         return this.resourceExists(test);
     }, then, onTimeout, timeout, { resource: test });
@@ -2294,7 +2342,7 @@ Casper.prototype.waitForResource = function waitForResource(test, then, onTimeou
 Casper.prototype.waitForUrl = function waitForUrl(url, then, onTimeout, timeout) {
     "use strict";
     this.checkStarted();
-    timeout = timeout ? timeout : this.options.waitTimeout;
+    timeout = getTimeoutAndCheckNextStepFunction(timeout, then, 'waitForUrl', this.options.waitTimeout);
     return this.waitFor(function _check() {
         if (utils.isString(url)) {
             return this.getCurrentUrl().indexOf(url) !== -1;
@@ -2318,7 +2366,7 @@ Casper.prototype.waitForUrl = function waitForUrl(url, then, onTimeout, timeout)
 Casper.prototype.waitForSelector = function waitForSelector(selector, then, onTimeout, timeout) {
     "use strict";
     this.checkStarted();
-    timeout = timeout ? timeout : this.options.waitTimeout;
+    timeout = getTimeoutAndCheckNextStepFunction(timeout, then, 'waitForSelector', this.options.waitTimeout);
     return this.waitFor(function _check() {
         return this.exists(selector);
     }, then, onTimeout, timeout, { selector: selector });
@@ -2336,7 +2384,7 @@ Casper.prototype.waitForSelector = function waitForSelector(selector, then, onTi
 Casper.prototype.waitForText = function(pattern, then, onTimeout, timeout) {
     "use strict";
     this.checkStarted();
-    timeout = timeout ? timeout : this.options.waitTimeout;
+    timeout = getTimeoutAndCheckNextStepFunction(timeout, then, 'waitForText', this.options.waitTimeout);
     return this.waitFor(function _check() {
         var content = this.getPageContent();
         if (utils.isRegExp(pattern)) {
@@ -2359,7 +2407,7 @@ Casper.prototype.waitForText = function(pattern, then, onTimeout, timeout) {
 Casper.prototype.waitForSelectorTextChange = function(selector, then, onTimeout, timeout) {
     "use strict";
     this.checkStarted();
-    timeout = timeout ? timeout : this.options.waitTimeout;
+    timeout = getTimeoutAndCheckNextStepFunction(timeout, then, 'waitForSelectorTextChange', this.options.waitTimeout);
     var currentSelectorText = this.fetchText(selector);
     return this.waitFor(function _check() {
         return currentSelectorText !== this.fetchText(selector);
@@ -2379,7 +2427,7 @@ Casper.prototype.waitForSelectorTextChange = function(selector, then, onTimeout,
 Casper.prototype.waitWhileSelector = function waitWhileSelector(selector, then, onTimeout, timeout) {
     "use strict";
     this.checkStarted();
-    timeout = timeout ? timeout : this.options.waitTimeout;
+    timeout = getTimeoutAndCheckNextStepFunction(timeout, then, 'waitWhileSelector', this.options.waitTimeout);
     return this.waitFor(function _check() {
         return !this.exists(selector);
     }, then, onTimeout, timeout, {
@@ -2401,7 +2449,7 @@ Casper.prototype.waitWhileSelector = function waitWhileSelector(selector, then, 
 Casper.prototype.waitUntilVisible = function waitUntilVisible(selector, then, onTimeout, timeout) {
     "use strict";
     this.checkStarted();
-    timeout = timeout ? timeout : this.options.waitTimeout;
+    timeout = getTimeoutAndCheckNextStepFunction(timeout, then, 'waitUntilVisible', this.options.waitTimeout);
     return this.waitFor(function _check() {
         return this.visible(selector);
     }, then, onTimeout, timeout, { visible: selector });
@@ -2420,7 +2468,7 @@ Casper.prototype.waitUntilVisible = function waitUntilVisible(selector, then, on
 Casper.prototype.waitWhileVisible = function waitWhileVisible(selector, then, onTimeout, timeout) {
     "use strict";
     this.checkStarted();
-    timeout = timeout ? timeout : this.options.waitTimeout;
+    timeout = getTimeoutAndCheckNextStepFunction(timeout, then, 'waitWhileVisible', this.options.waitTimeout);
     return this.waitFor(function _check() {
         return !this.visible(selector);
     }, then, onTimeout, timeout, {
@@ -2704,7 +2752,7 @@ function createPage(casper) {
     page.onResourceRequested = function onResourceRequested(requestData, request) {
         casper.emit('resource.requested', requestData, request);
         var checkUrl = ((phantom.casperEngine === 'phantomjs' && utils.ltVersion(phantom.version, '2.1.0')) ||
-                   (phantom.casperEngine === 'slimerjs' && utils.ltVersion(phantom.version, '0.10.0'))) ? utils.decodeUrl(requestData.url) : requestData.url;
+                   (phantom.casperEngine === 'slimerjs' && utils.ltVersion(slimer.version, '0.10.0'))) ? utils.decodeUrl(requestData.url) : requestData.url;
         if (checkUrl === casper.requestUrl) {
             casper.emit('page.resource.requested', requestData, request);
         }
