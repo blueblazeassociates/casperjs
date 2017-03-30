@@ -110,7 +110,7 @@ Logging level (see the logging section for more information)
 
 **Default:** ``null``
 
-**Signature:** ``onAlert(String message)``
+**Signature:** ``onAlert(Object Casper, String message)``
 
 A function to be called when a javascript alert() is triggered
 
@@ -134,7 +134,7 @@ A function to be called when Casper#die() is called
 
 **Default:** ``null``
 
-**Signature:** ``onError(String msg, Array backtrace)``
+**Signature:** ``onError(Object Casper, String msg, Array backtrace)``
 
 A function to be called when an "error" level event occurs
 
@@ -171,7 +171,7 @@ A function to be called after ``WebPage`` instance has been initialized
 
 **Default:** ``null``
 
-**Signature:** ``onResourceReceived(Object resource)``
+**Signature:** ``onResourceReceived(Object Casper, Object resource)``
 
 Proxy method for PhantomJS' ``WebPage#onResourceReceived()`` callback, but the current Casper instance is passed as first argument.
 
@@ -183,6 +183,8 @@ Proxy method for PhantomJS' ``WebPage#onResourceReceived()`` callback, but the c
 **Type:** ``Function``
 
 **Default:** ``null``
+
+**Signature:** ``onResourceRequested(Object Casper, Object resource)``
 
 Proxy method for PhantomJS' WebPage#onResourceRequested() callback, but the current Casper instance is passed as first argument.
 
@@ -270,12 +272,22 @@ PhantomJS's WebPage settings object. Available settings are:
 
 - ``javascriptEnabled`` defines whether to execute the script in the page or not (default to ``true``)
 - ``loadImages`` defines whether to load the inlined images or not
-- ``loadPlugins`` defines whether to load NPAPI plugins (Flash, Silverlight, …) or not
 - ``localToRemoteUrlAccessEnabled`` defines whether local resource (e.g. from file) can access remote URLs or not (default to ``false``)
 - ``userAgent`` defines the user agent sent to server when the web page requests resources
 - ``userName`` sets the user name used for HTTP authentication
 - ``password`` sets the password used for HTTP authentication
+- ``resourceTimeout`` (in milli-secs) defines the timeout after which any resource requested will stop trying and proceed with other parts of the page. onResourceTimeout callback will be called on timeout. undefined (default value) means default gecko parameters.
+
+PhantomJS specific settings :
+
 - ``XSSAuditingEnabled`` defines whether load requests should be monitored for cross-site scripting attempts (default to ``false``)
+- ``webSecurityEnabled`` defines whether web security should be enabled or not (defaults to true)
+
+SlimerJS specific settings :
+
+- ``allowMedia`` false to deactivate the loading of media (audio / video). Default: true. (SlimerJS only)
+- ``maxAuthAttempts`` indicate the maximum of attempts of HTTP authentication. (SlimerJS 0.9)
+- ``plainTextAllContent`` true to indicate that webpage.plainText returns everything, even content of script elements, invisible elements etc.. Default: false.
 
 .. index:: Remote scripts
 
@@ -2210,7 +2222,7 @@ Waits until a `JavaScript alert <https://developer.mozilla.org/en-US/docs/Web/AP
 ``waitForPopup()``
 -------------------------------------------------------------------------------
 
-**Signature:** ``waitForPopup(String|RegExp urlPattern[, Function then, Function onTimeout, Number timeout])``
+**Signature:** ``waitForPopup(String|RegExp|Object urlPattern[, Function then, Function onTimeout, Number timeout])``
 
 .. versionadded:: 1.0
 
@@ -2227,7 +2239,27 @@ The currently loaded popups are available in the ``Casper.popups`` array-like pr
     casper.waitForPopup(/popup\.html$/, function() {
         this.test.assertEquals(this.popups.length, 1);
     });
+    
+    // this will wait for the first popup to be opened and loaded
+    casper.waitForPopup(0, function() {
+        this.test.assertEquals(this.popups.length, 1);
+    });
+    
+    // this will wait for the popup's named to be opened and loaded
+    casper.waitForPopup({windowName: "mainPopup"}, function() {
+        this.test.assertEquals(this.popups.length, 1);
+    });
 
+    // this will wait for the popup's title to be opened and loaded
+    casper.waitForPopup({title: "Popup Title"}, function() {
+        this.test.assertEquals(this.popups.length, 1);
+    });
+    
+    // this will wait for the popup's url to be opened and loaded
+    casper.waitForPopup({url: 'http://foo.bar/'}, function() {
+        this.test.assertEquals(this.popups.length, 1);
+    });
+    
     // this will set the popup DOM as the main active one only for time the
     // step closure being executed
     casper.withPopup(/popup\.html$/, function() {
@@ -2445,6 +2477,18 @@ Switches the main page to a popup matching the information passed as argument, a
         this.test.assertTitle('Popup title');
     });
 
+    // this will set the popup DOM as the main active one only for time the
+    // step closure being executed
+    casper.withPopup(0, function() {
+        this.test.assertTitle('Popup title');
+    });
+    
+    // this will set the popup DOM as the main active one only for time the
+    // step closure being executed
+    casper.withPopup({windowName: "mainPopup", title:'Popup title', url:'http://foo.bar/'}, function() {
+        this.test.assertTitle('Popup title');
+    });
+    
     // next step will automatically revert the current page to the initial one
     casper.then(function() {
         this.test.assertTitle('Main page title');

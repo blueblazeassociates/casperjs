@@ -29,7 +29,7 @@
  */
 
 /*global __utils__, CasperError, console, exports, phantom, patchRequire, require:true*/
-var require = patchRequire(require);
+require = patchRequire(require);
 var colorizer = require('colorizer');
 var events = require('events');
 var fs = require('fs');
@@ -119,6 +119,7 @@ var Casper = function Casper(options) {
         page:                null,
         pageSettings:        {
             localToRemoteUrlAccessEnabled: true,
+            javascriptEnabled:             true,
             userAgent:                     defaultUserAgent
         },
         remoteScripts:       [],
@@ -141,6 +142,7 @@ var Casper = function Casper(options) {
     }
     this.colorizer = this.getColorizer();
     this.mouse = mouse.create(this);
+    this.frames = [];
     this.popups = pagestack.create();
     // properties
     this.checker = null;
@@ -148,9 +150,7 @@ var Casper = function Casper(options) {
     this.currentUrl = 'about:blank';
     this.currentHTTPStatus = null;
     this.history = [];
-    this.loadInProgress = false;
     this.navigationRequested = false;
-    this.browserInitializing = false;
     this.logFormats = {};
     this.logLevels = ["debug", "info", "warning", "error"];
     this.logStyles = {
@@ -196,22 +196,18 @@ var Casper = function Casper(options) {
             notices.push('  in module ' + match[2]);
             msg = match[3];
         }
-        /* FIXME:
-        this leads to a recursive on('error'...) trigger,
-        at least in phantomjs2
 
-        console.error(c.colorize(msg, 'RED_BAR', 80));
+        console.log(c.colorize(msg, 'RED_BAR', 80));
         notices.forEach(function(notice) {
-            console.error(c.colorize(notice, 'COMMENT'));
+            console.log(c.colorize(notice, 'COMMENT'));
         });
         (backtrace || []).forEach(function(item) {
             var message = fs.absolute(item.file) + ":" + c.colorize(item.line, "COMMENT");
             if (item['function']) {
                 message += " in " + c.colorize(item['function'], "PARAMETER");
             }
-            console.error("  " + message);
+            console.log("  " + message);
         });
-        */
     });
 
     // deprecated feature event handler
@@ -365,7 +361,13 @@ Casper.prototype.captureBase64 = function captureBase64(format, area) {
     } else if (utils.isValidSelector(area)) {
         // if area is a selector string or object
         this.log(f("Capturing base64 %s representation of %s", format, area), "debug");
-        base64 = this.captureBase64(format, this.getElementBounds(area));
+        var scrollPos = this.evaluate(function() {
+            return { x: scrollX, y: scrollY };
+        });
+        var elementBounds = this.getElementBounds(area);
+        elementBounds.top += scrollPos.y;
+        elementBounds.left += scrollPos.x;
+        base64 = this.captureBase64(format, elementBounds);
     } else {
         // whole page capture
         this.log(f("Capturing base64 %s representation of page", format), "debug");
@@ -386,7 +388,13 @@ Casper.prototype.captureBase64 = function captureBase64(format, area) {
  */
 Casper.prototype.captureSelector = function captureSelector(targetFile, selector, imgOptions) {
     "use strict";
-    return this.capture(targetFile, this.getElementBounds(selector), imgOptions);
+    var scrollPos = this.evaluate(function() {
+        return { x: scrollX, y: scrollY };
+    });
+    var elementBounds = this.getElementBounds(selector);
+    elementBounds.top += scrollPos.y;
+    elementBounds.left += scrollPos.x;
+    return this.capture(targetFile, elementBounds, imgOptions);
 };
 
 /**
@@ -397,7 +405,8 @@ Casper.prototype.captureSelector = function captureSelector(targetFile, selector
  */
 Casper.prototype.checkStep = function checkStep(self, onComplete) {
     "use strict";
-    if (self.pendingWait || self.loadInProgress || self.navigationRequested || self.browserInitializing) {
+
+    if (self.pendingWait || self.page.loadInProgress || self.navigationRequested || self.page.browserInitializing ) {
         return;
     }
     var step = self.steps[self.step++];
@@ -708,6 +717,7 @@ Casper.prototype.evaluate = function evaluate(fn, context) {
     if (!utils.isFunction(fn) && !utils.isString(fn)) { // phantomjs allows functions defs as string
         throw new CasperError("evaluate() only accepts functions or strings");
     }
+
     // ensure client utils are always injected
     this.injectClientUtils();
     // function context
@@ -715,8 +725,17 @@ Casper.prototype.evaluate = function evaluate(fn, context) {
         return utils.clone(this.page.evaluate(fn));
     } else if (arguments.length === 2) {
         // check for closure signature if it matches context
-        if (utils.isObject(context) && eval(fn).length === Object.keys(context).length) {
-            context = utils.objectValues(context);
+        if (utils.isObject(context) && fn.length === Object.keys(context).length) {
+            /*
+             * in case if user passes argument as one array with only one object.
+             * evaluate shlould return original array with one object
+             * instead of converte this array to object
+             */
+            if (utils.isArray(context) && context.length === 1) {
+                context = [context];
+            } else {
+                context = utils.objectValues(context);
+            }
         } else {
             context = [context];
         }
@@ -768,6 +787,8 @@ Casper.prototype.exists = function exists(selector) {
 Casper.prototype.exit = function exit(status) {
     "use strict";
     this.emit('exit', status);
+    this.die = function(){};
+    this.exiting = true;
     setTimeout(function() { phantom.exit(status); }, 0);
 };
 
@@ -794,7 +815,7 @@ Casper.prototype.fetchText = function fetchText(selector) {
 Casper.prototype.fillForm = function fillForm(selector, vals, options) {
     "use strict";
     this.checkStarted();
-
+    var self = this;
     var selectorType = options && options.selectorType || "names",
         submit = !!(options && options.submit);
 
@@ -819,29 +840,28 @@ Casper.prototype.fillForm = function fillForm(selector, vals, options) {
 
     // File uploads
     if (fillResults.files && fillResults.files.length > 0) {
-        if (utils.isObject(selector) && selector.type === 'xpath') {
-            this.warn('Filling file upload fields is currently not supported using ' +
-                      'XPath selectors; Please use a CSS selector instead.');
-        } else {
-            fillResults.files.forEach(function _forEach(file) {
-                if (!file || !file.path) {
-                    return;
+        fillResults.files.forEach(function _forEach(file) {
+            if (!file || !file.path) {
+                return;
+            }
+            var paths = (utils.isArray(file.path) && file.path.length > 0) ? file.path : [file.path];
+            paths.map(function(filePath) {
+                if (!fs.exists(filePath)) {
+                    throw new CasperError('Cannot upload nonexistent file: ' + filePath);
                 }
-                var paths = (utils.isArray(file.path) && file.path.length > 0) ? file.path : [file.path];
-                paths.map(function(filePath) {
-                            if (!fs.exists(filePath)) {
-                                throw new CasperError('Cannot upload nonexistent file: ' + filePath);
-                            }
-                        },this);
-                var fileFieldSelector;
-                if (file.type === "names") {
-                    fileFieldSelector = [selector, 'input[name="' + file.selector + '"]'].join(' ');
-                } else if (file.type === "css" || file.type === "labels") {
-                    fileFieldSelector = [selector, file.selector].join(' ');
-                }
-                this.page.uploadFile(fileFieldSelector, paths);
-            }.bind(this));
-        }
+            },this);
+            var fileFieldSelector;
+            if (file.type === "names") {
+                fileFieldSelector = [selector, 'input[name="' + file.selector + '"]'].join(' ');
+            } else if (file.type === "css" || file.type === "labels") {
+                fileFieldSelector = [selector, file.selector].join(' ');
+            } else if (file.type === "xpath") {
+                fileFieldSelector = [selector, self.evaluate(function _evaluate(selector, scope, limit) {
+                    return __utils__.getCssSelector(selector, scope, limit);
+                }, selectXPath(file.selector), selector, 'FORM')].join(' ');
+            }
+            this.page.uploadFile(fileFieldSelector, paths);
+        }.bind(this));
     }
 
     // Form submission?
@@ -1270,12 +1290,13 @@ Casper.prototype.initErrorHandler = function initErrorHandler() {
  *
  * @return Casper
  */
-Casper.prototype.injectClientScripts = function injectClientScripts() {
+Casper.prototype.injectClientScripts = function injectClientScripts(page) {
     "use strict";
     this.checkStarted();
     if (!this.options.clientScripts) {
         return;
     }
+    page = page || this.page;
     if (utils.isString(this.options.clientScripts)) {
         this.options.clientScripts = [this.options.clientScripts];
     }
@@ -1283,7 +1304,7 @@ Casper.prototype.injectClientScripts = function injectClientScripts() {
         throw new CasperError("The clientScripts option must be an array");
     }
     this.options.clientScripts.forEach(function _forEach(script) {
-        if (this.page.injectJs(script)) {
+        if (page.injectJs(script)) {
             this.log(f('Automatically injected %s client side', script), "debug");
         } else {
             this.warn(f('Failed injecting %s client side', script));
@@ -1296,17 +1317,18 @@ Casper.prototype.injectClientScripts = function injectClientScripts() {
  * Injects Client-side utilities in current page context.
  *
  */
-Casper.prototype.injectClientUtils = function injectClientUtils() {
+Casper.prototype.injectClientUtils = function injectClientUtils(page) {
     "use strict";
     this.checkStarted();
-    var clientUtilsInjected = this.page.evaluate(function() {
+    page = page || this.page;
+    var clientUtilsInjected = page.evaluate(function() {
         return typeof __utils__ === "object";
     });
     if (true === clientUtilsInjected) {
         return;
     }
     var clientUtilsPath = require('fs').pathJoin(phantom.casperPath, 'modules', 'clientutils.js');
-    if (true === this.page.injectJs(clientUtilsPath)) {
+    if (true === page.injectJs(clientUtilsPath)) {
         this.log("Successfully injected Casper client-side utilities", "debug");
     } else {
         this.warn("Failed to inject Casper client-side utilities");
@@ -1314,7 +1336,7 @@ Casper.prototype.injectClientUtils = function injectClientUtils() {
     // ClientUtils and Casper shares the same options
     // These are not the lines I'm the most proud of in my life, but it works.
     /*global __options*/
-    this.page.evaluate(function() {
+    page.evaluate(function() {
         window.__utils__ = new window.ClientUtils(__options);
     }.toString().replace('__options', JSON.stringify(this.options)));
 };
@@ -1324,16 +1346,17 @@ Casper.prototype.injectClientUtils = function injectClientUtils() {
  *
  * @return Casper
  */
-Casper.prototype.includeRemoteScripts = function includeRemoteScripts() {
+Casper.prototype.includeRemoteScripts = function includeRemoteScripts(page) {
     "use strict";
     var numScripts = this.options.remoteScripts.length, loaded = 0;
     if (numScripts === 0) {
         return this;
     }
     this.waitStart();
+    page = page || this.page;
     this.options.remoteScripts.forEach(function(scriptUrl) {
         this.log(f("Loading remote script: %s", scriptUrl), "debug");
-        this.page.includeJs(scriptUrl, function() {
+        page.includeJs(scriptUrl, function() {
             loaded++;
             this.log(f("Remote script %s loaded", scriptUrl), "debug");
             if (loaded === numScripts) {
@@ -1460,14 +1483,16 @@ Casper.prototype.open = function open(location, settings) {
     // current request url
     this.configureHttpAuth(location, settings);
     this.requestUrl = this.filter('open.location', location) || location;
+
     this.emit('open', this.requestUrl, settings);
     this.log(f('opening url: %s, HTTP %s', this.requestUrl, settings.method.toUpperCase()), "debug");
     // reset resources
     this.resources = [];
+    this.resourcesTime = [];
     // custom headers
     this.page.customHeaders = utils.mergeObjects(utils.clone(baseCustomHeaders), customHeaders);
     // perfom request
-    this.browserInitializing = true;
+    this.page.browserInitializing = true;
     var phantomJsSettings = {
         operation: settings.method,
         data:      settings.data
@@ -1576,7 +1601,7 @@ Casper.prototype.runStep = function runStep(step) {
     "use strict";
     /*eslint max-statements:0*/
     this.checkStarted();
-    var skipLog = utils.isObject(step.options) && step.options.skipLog === true,
+    var skipLog = !!step.options && utils.isObject(step.options) && step.options.skipLog === true,
         stepInfo = f("Step %s %d/%d", step.name || "anonymous", this.step, this.steps.length),
         stepResult;
     function getCurrentSuiteId(casper) {
@@ -1669,7 +1694,7 @@ Casper.prototype.sendKeys = function(selector, keys, options) {
         }, selector);
         this.click(selector);
     }
-    var modifiers = utils.computeModifier(options && options.modifiers,
+    var modifiers = utils.computeModifier(options && options.modifiers || null,
                                           this.page.event.modifier);
     this.page.sendEvent(options.eventType, keys, null, null, modifiers);
     if (isTextInput && !options.keepFocus) {
@@ -1738,12 +1763,21 @@ Casper.prototype.setFieldValue = function setFieldValue(selector, value, form, o
         if (selectorType) {
             selector = __utils__.makeSelector(selector, selectorType);
         }
+        var info = __utils__.getElementInfo(selector);
+        if (!!info && info.nodeName === 'input' && info.attributes.type === 'file') {
+            return __utils__.getCssSelector(selector);
+        }
         return __utils__.setFieldValue(selector, value, form);
     }, selector, value, form, selectorType);
 
     if (!result) {
         throw new CasperError("Unable to set field '" + selector + " to value: " + value) +
             ' in setFieldValue().';
+    } else if (typeof result === "string") {
+        if (!value || !fs.exists(value)) {
+            throw new CasperError('Cannot upload nonexistent file: ' + value);
+        }
+        this.page.uploadFile(result, value);
     }
 };
 
@@ -1853,7 +1887,7 @@ Casper.prototype.status = function status(asString) {
                       'options', 'pendingWait', 'requestUrl', 'started', 'step', 'url'];
     var currentStatus = {};
     properties.forEach(function(property) {
-        currentStatus[property] = this[property];
+        currentStatus[property] = this[property] || this.page[property];
     }.bind(this));
     return asString === true ? utils.dump(currentStatus) : currentStatus;
 };
@@ -2055,6 +2089,7 @@ Casper.prototype.userAgent = function userAgent(agent) {
     this.options.pageSettings.userAgent = agent;
     if (this.started && this.page) {
         this.page.settings.userAgent = agent;
+        this.page.customHeaders = {"User-Agent": agent};
     }
     return this;
 };
@@ -2079,6 +2114,8 @@ Casper.prototype.viewport = function viewport(width, height, then) {
         width: width,
         height: height
     };
+    
+    this.options.viewportSize = this.page.viewportSize;
     // setting the viewport could cause a redraw and it can take
     // time. At least for Gecko, we should wait a bit, even
     // if this time could not be enough.
@@ -2497,18 +2534,30 @@ Casper.prototype.withFrame = function withFrame(frameInfo, then) {
         }
         // make the frame page the currently active one
         this.page.switchToChildFrame(frameInfo);
+        this.frames.push(frameInfo);
     });
     try {
         this.then(then);
     } catch (e) {
         // revert to main page on error
         this.warn("Error while processing frame step: " + e);
-        this.page.switchToParentFrame();
         throw e;
     }
     return this.then(function _step() {
         // revert to main page
-        this.page.switchToParentFrame();
+        this.page.switchToMainFrame();
+        this.frames.pop();
+        for (var i = 0,l = this.frames.length; i < l ; i++) {
+            var frameInfo = this.frames[i];
+            if (utils.isNumber(frameInfo)) {
+                if (frameInfo > this.page.framesCount - 1) {
+                    break;
+                }
+            } else if (this.page.framesName.indexOf(frameInfo) === -1) {
+                break;
+            }
+            this.page.switchToFrame(frameInfo);
+        }
     });
 };
 
@@ -2552,7 +2601,9 @@ Casper.prototype.withPopup = function withPopup(popupInfo, then) {
 Casper.prototype.newPage = function newPage() {
     "use strict";
     this.checkStarted();
-    this.page.close();
+    if (this.page !== null) {
+        this.page.close();
+    }
     this.page = this.mainPage = createPage(this);
     this.page.settings = utils.mergeObjects(this.page.settings, this.options.pageSettings);
     if (utils.isClipRect(this.options.clipRect)) {
@@ -2607,67 +2658,30 @@ exports.Casper = Casper;
 function createPage(casper) {
     /*eslint max-statements:0*/
     "use strict";
-    var page = require('webpage').create();
-    page.onAlert = function onAlert(message) {
-        casper.log('[alert] ' + message, "info", "remote");
-        casper.emit('remote.alert', message);
-        if (utils.isFunction(casper.options.onAlert)) {
-            casper.options.onAlert.call(casper, casper, message);
-        }
-    };
-    page.onConfirm = function onConfirm(message) {
-        if ('page.confirm' in casper._filters) {
-            return casper.filter('page.confirm', message);
-        }
-        return true;
-    };
-    page.onConsoleMessage = function onConsoleMessage(msg) {
-        // client utils casper console message
-        var consoleTest = /^\[casper\.echo\]\s?([\s\S]*)/.exec(msg);
-        if (consoleTest && consoleTest.length === 2) {
-            casper.echo(consoleTest[1]);
-            return; // don't trigger remote.message event for these
-        }
-        // client utils log messages
-        var logLevel = "info",
-            logTest = /^\[casper:(\w+)\]\s?([\s\S]*)/m.exec(msg);
-        if (logTest && logTest.length === 3) {
-            logLevel = logTest[1];
-            msg = logTest[2];
-            casper.log(msg, logLevel, "remote");
-        } else {
-            casper.emit('remote.message', msg);
+    var mainPage = require('webpage').create();
+    mainPage.isPopup = false;
+
+    var onClosing = function onClosing(closedPopup) {
+        if (closedPopup.isPopup) {
+            if (casper.page.id === closedPopup.id) {
+                casper.page = casper.mainPage;
+            }
+            casper.popups.clean();
+            casper.emit('popup.closed', closedPopup);
+        } else if (!this.exiting) {
+            casper.page = null;
+            casper.newPage();
         }
     };
 
-    page.onCallback = function onCallback(data){
-        casper.emit('remote.callback',data);
-    };
-
-    page.onError = function onError(msg, trace) {
-        casper.emit('page.error', msg, trace);
-    };
-    page.onInitialized = function onInitialized() {
-        casper.emit('page.initialized', page);
-        if (utils.isFunction(casper.options.onPageInitialized)) {
-            casper.log("Post-configuring WebPage instance", "debug");
-            casper.options.onPageInitialized.call(casper, page);
-        }
-    };
-    page.onLoadStarted = function onLoadStarted() {
-        // in some case, there is no navigation requested event, so
-        // be sure that browserInitializing is false to not block checkStep()
-        casper.browserInitializing = false;
-        casper.loadInProgress = true;
-        casper.emit('load.started');
-    };
-    page.onLoadFinished = function onLoadFinished(status) {
+    var onLoadFinished = function onLoadFinished(status) {
+        this.windowNameBackUp = this.windowName;
         /*eslint max-statements:0*/
         if (status !== "success") {
             casper.emit('load.failed', {
                 status:      status,
                 http_status: casper.currentHTTPStatus,
-                url:         casper.requestUrl
+                url:         this.url
             });
             var message = 'Loading resource failed with status=' + status;
             if (casper.currentHTTPStatus) {
@@ -2676,26 +2690,53 @@ function createPage(casper) {
             message += ': ' + casper.requestUrl;
             casper.log(message, "warning");
             casper.navigationRequested = false;
-            casper.browserInitializing = false;
+            this.browserInitializing = false;
             if (utils.isFunction(casper.options.onLoadError)) {
                 casper.options.onLoadError.call(casper, casper, casper.requestUrl, status);
             }
         }
+        casper.page.switchToMainFrame();
+        for (var i = 0,l = casper.frames.length; i < l ; i++) {
+            var frameInfo = casper.frames[i];
+            if (utils.isNumber(frameInfo)) {
+                if (frameInfo > casper.page.framesCount - 1) {
+                    break;
+                }
+            } else if (casper.page.framesName.indexOf(frameInfo) === -1) {
+                break;
+            }
+            casper.page.switchToFrame(frameInfo);
+        }
         // local client scripts
-        casper.injectClientScripts();
+        casper.injectClientScripts(this);
         // remote client scripts
-        casper.includeRemoteScripts();
+        casper.includeRemoteScripts(this);
         // Client-side utils injection
-        casper.injectClientUtils();
+        casper.injectClientUtils(this);
         // history
         casper.history.push(casper.getCurrentUrl());
         casper.emit('load.finished', status);
-        casper.loadInProgress = false;
+        this.loadInProgress = false;
+        if (this.isPopup) {
+            casper.emit('popup.loaded', this);
+        } else {
+            casper.emit('page.loaded', this);
+        }
     };
-    page.onNavigationRequested = function onNavigationRequested(url, type, willNavigate, isMainFrame) {
+
+    var onLoadStarted = function onLoadStarted() {
+        // in some case, there is no navigation requested event, so
+        // be sure that browserInitializing is false to not block checkStep()
+        this.browserInitializing = false;
+        this.loadInProgress = true;
+        casper.emit('load.started');
+    };
+
+    var onNavigationRequested = function onNavigationRequested(url, type, willNavigate, isMainFrame) {
         casper.log(f('Navigation requested: url=%s, type=%s, willNavigate=%s, isMainFrame=%s',
                      url, type, willNavigate, isMainFrame), "debug");
-        casper.browserInitializing = false;
+        this.browserInitializing = false;
+        casper.page.switchToMainFrame();
         if (isMainFrame && casper.requestUrl !== url) {
             var currentUrl = casper.requestUrl;
             var newUrl = url;
@@ -2713,61 +2754,151 @@ function createPage(casper) {
             // there will not be loadStarted, loadFinished events
             // so it could cause issues (for exemple, checkStep that
             // do no execute the next step -> infinite loop on checkStep)
-            if (willNavigate && currentUrl !== newUrl)
-                casper.navigationRequested  = true;
-
+            if (willNavigate && currentUrl !== newUrl) {
+                casper.navigationRequested = true;
+            }
             if (willNavigate) {
                 casper.requestUrl = url;
             }
         }
         casper.emit('navigation.requested', url, type, willNavigate, isMainFrame);
     };
-    page.onPageCreated = function onPageCreated(popupPage) {
-        casper.emit('popup.created', popupPage);
-        popupPage.onLoadFinished = function onLoadFinished() {
-            // SlimerJS needs this line of code because of issue
-            // https://github.com/laurentj/slimerjs/issues/48
-            // else checkStep turns into an infinite loop
-            // after clicking on an <a target="_blank">
-            casper.navigationRequested  = false;
-            casper.popups.push(popupPage);
-            casper.emit('popup.loaded', popupPage);
+    
+    var onPageCreated = function onPageCreated(page) {
+        page.isPopup = (typeof page.isPopup === "undefined") ? true : false;
+        page.id = new Date().getTime();
+        page.browserInitializing = false;
+        page.loadInProgress = false; 
+        page.windowNameBackUp = page.windowName;
+
+        page.onClosing =  function() {
+            var p = page;
+            return function() {
+                return onClosing.apply(p, arguments);
+            };
+        }();
+        page.onLoadFinished = function() {
+            var p = page;
+            return function() {
+                return onLoadFinished.apply(p, arguments);
+            };
+        }();
+        page.onLoadStarted = function() {
+            var p = page;
+            return function() {
+                return onLoadStarted.apply(p, arguments);
+            };
+        }();
+        page.onNavigationRequested = function() {
+            var p = page;
+            return function() {
+                return onNavigationRequested.apply(p, arguments);
+            };
+        }();
+        page.onPageCreated = onPageCreated;
+
+        page.onAlert = function onAlert(message) {
+            casper.log('[alert] ' + message, "info", "remote");
+            casper.emit('remote.alert', message);
+            if (utils.isFunction(casper.options.onAlert)) {
+                casper.options.onAlert.call(casper, casper, message);
+            }
         };
-        popupPage.onClosing = function onClosing(closedPopup) {
-            casper.popups.clean();
-            casper.emit('popup.closed', closedPopup);
+        page.onConfirm = function onConfirm(message) {
+            if ('page.confirm' in casper._filters) {
+                return casper.filter('page.confirm', message);
+            }
+            return true;
         };
-    };
-    page.onPrompt = function onPrompt(message, value) {
-        return casper.filter('page.prompt', message, value);
-    };
-    page.onResourceReceived = function onResourceReceived(resource) {
-        http.augmentResponse(resource);
-        casper.emit('resource.received', resource);
-        if (utils.isFunction(casper.options.onResourceReceived)) {
-            casper.options.onResourceReceived.call(casper, casper, resource);
+        page.onConsoleMessage = function onConsoleMessage(msg) {
+            // client utils casper console message
+            var consoleTest = /^\[casper\.echo\]\s?([\s\S]*)/.exec(msg);
+            if (consoleTest && consoleTest.length === 2) {
+                casper.echo(consoleTest[1]);
+                return; // don't trigger remote.message event for these
+            }
+            // client utils log messages
+            var logLevel = "info",
+                logTest = /^\[casper:(\w+)\]\s?([\s\S]*)/m.exec(msg);
+            if (logTest && logTest.length === 3) {
+                logLevel = logTest[1];
+                msg = logTest[2];
+                casper.log(msg, logLevel, "remote");
+            } else {
+                casper.emit('remote.message', msg);
+            }
+        };
+
+        page.onCallback = function onCallback(data){
+            casper.emit('remote.callback', data);
+        };
+        page.onError = function onError(msg, trace) {
+            casper.emit('page.error', msg, trace);
+        };
+        page.onFilePicker = function onFilePicker(olderFile) {
+            return casper.filter('page.filePicker', olderFile);
+        };
+        page.onInitialized = function onInitialized() {
+            casper.emit('page.initialized', page);
+            if (utils.isFunction(casper.options.onPageInitialized)) {
+                casper.log("Post-configuring WebPage instance", "debug");
+                casper.options.onPageInitialized.call(casper, page);
+            }
+        };
+        page.onLongRunningScript = function onLongRunningScript(message) {
+            casper.emit('remote.longRunningScript', page, message);
+        };
+        page.onPrompt = function onPrompt(message, value) {
+            return casper.filter('page.prompt', message, value);
+        };
+        page.onResourceReceived = function onResourceReceived(resource) {
+            http.augmentResponse(resource);
+            casper.emit('resource.received', resource);
+            if (utils.isFunction(casper.options.onResourceReceived)) {
+                casper.options.onResourceReceived.call(casper, casper, resource);
+            }
+            casper.handleReceivedResource(resource);
+        };
+        page.onResourceRequested = function onResourceRequested(requestData, request) {
+            casper.emit('resource.requested', requestData, request);
+            var checkUrl = ((phantom.casperEngine === 'phantomjs' && utils.ltVersion(phantom.version, '2.1.0')) ||
+                       (phantom.casperEngine === 'slimerjs' && utils.ltVersion(slimer.version, '0.10.0'))) ? utils.decodeUrl(requestData.url) : requestData.url;
+            if (checkUrl === casper.requestUrl) {
+                casper.emit('page.resource.requested', requestData, request);
+            }
+            if (utils.isFunction(casper.options.onResourceRequested)) {
+                casper.options.onResourceRequested.call(casper, casper, requestData, request);
+            }
+        };
+        page.onResourceError = function onResourceError(resourceError) {
+            casper.emit('resource.error', resourceError);
+        };
+        page.onResourceTimeout = function onResourceTimeout(resourceError) {
+            casper.emit('resource.timeout', resourceError);
+        };
+        page.onUrlChanged= function onUrlChanged(url) {
+            casper.log(f('url changed to "%s"', url), "debug");
+            casper.navigationRequested= false;
+            casper.emit('url.changed', url);
+        };
+
+        if (page.isPopup) {
+            casper.emit('popup.created', page);
+            if (casper.options.pageSettings.userAgent !== defaultUserAgent) {
+                page.customHeaders = {"User-Agent": casper.options.pageSettings.userAgent};
+            }
+            page.settings = utils.mergeObjects(page.settings, casper.options.pageSettings);
+            if (utils.isClipRect(casper.options.clipRect)) {
+                page.clipRect = casper.options.clipRect;
+            }
+            if (utils.isObject(casper.options.viewportSize)) {
+                page.viewportSize = casper.options.viewportSize;
+            }
+            casper.popups.push(page);
+        } else {
+            casper.emit('page.created', page);
         }
-        casper.handleReceivedResource(resource);
     };
-    page.onResourceRequested = function onResourceRequested(requestData, request) {
-        casper.emit('resource.requested', requestData, request);
-        var checkUrl = ((phantom.casperEngine === 'phantomjs' && utils.ltVersion(phantom.version, '2.1.0')) ||
-                   (phantom.casperEngine === 'slimerjs' && utils.ltVersion(slimer.version, '0.10.0'))) ? utils.decodeUrl(requestData.url) : requestData.url;
-        if (checkUrl === casper.requestUrl) {
-            casper.emit('page.resource.requested', requestData, request);
-        }
-        if (utils.isFunction(casper.options.onResourceRequested)) {
-            casper.options.onResourceRequested.call(casper, casper, requestData, request);
-        }
-    };
-    page.onResourceError = function onResourceError(resourceError) {
-        casper.emit('resource.error', resourceError);
-    };
-    page.onUrlChanged = function onUrlChanged(url) {
-        casper.log(f('url changed to "%s"', url), "debug");
-        casper.navigationRequested = false;
-        casper.emit('url.changed', url);
-    };
-    casper.emit('page.created', page);
-    return page;
+    onPageCreated(mainPage);
+    return mainPage;
 }
